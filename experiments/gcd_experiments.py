@@ -1,13 +1,10 @@
-
-from cProfile import label
-from matplotlib.pyplot import figure
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
 import scipy as sp
 
-import gcd_utils
-import gcd_models
+import utils.gcd_utils as gcd_utils
+import models.gcd_models as gcd_models
 
 from scipy.sparse import coo_matrix, hstack, vstack, find
 from scipy.sparse.linalg import spsolve

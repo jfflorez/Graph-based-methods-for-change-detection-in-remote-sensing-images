@@ -10,8 +10,8 @@ from skimage.filters import sobel
 import sys
 
 # adding Folder_2 to the system path
-sys.path.insert(0, 'C:\\Users\\juanf\\OneDrive\\Documents\\GitHub\\Learning-graphs-from-data\\')
-import src.gl_models as gl
+#sys.path.insert(0, 'C:\\Users\\juanf\\OneDrive\\Documents\\GitHub\\Learning-graphs-from-data\\')
+import utils.gl.src.gl_models as gl
 
 
 def remove_intensity_outliers(img):

@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import torch
 import scipy as sp
 
-import gcd_utils
+import utils.gcd_utils as gcd_utils
 from scipy.sparse import coo_matrix, hstack, vstack, find
 from scipy.sparse.linalg import spsolve
 

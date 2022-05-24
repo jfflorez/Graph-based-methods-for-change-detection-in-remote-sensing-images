@@ -19,9 +19,9 @@ dirname = os.path.dirname(__file__)
 datasets_dir = os.path.join(dirname, 'datasets')
 
 import utils.gl.src.gl_models as gl
-import gcd_utils 
-import gcd_models
-import gcd_experiments
+import utils.gcd_utils as gcd_utils 
+#import models.gcd_models as gcd_models
+import experiments.gcd_experiments as gcd_experiments
 
 
 list_dataset_names = ['Alaska','California','Atlantico']
@@ -51,9 +51,9 @@ for dataset_idx in range(3):
 
     n = X.shape[0]
     f_ask = dataset['gt']
-    int(n/4)
+
     k_list = [3, int(n/16), int(n/4)]
-    p = 0.3
+    p = 0.3 # fraction of positive labels used for training
     segments = segments_slic
     stype='random-class-dependent'
     gcd_experiments.exp_effect_of_theta(k_list, p, dataset_name, f_ask, F, X_mean, X, segments,stype)
