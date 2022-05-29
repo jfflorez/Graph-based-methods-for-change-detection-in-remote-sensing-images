@@ -150,14 +150,16 @@ def gsp_learn_graph_log_degrees(Z, a, b, params={'nargout': 1}):
     if not (isinstance(Z,np.ndarray) or isspmatrix(Z)):
         raise ValueError('Z must be either a np.ndarray or scipy sparse array of dimension 1 or 2.')
 
-    if not sum(utils.reshape_as_column(Z)) > 0:
+    if not np.sum(utils.reshape_as_column(Z)) > 0:
         raise ValueError('Z cannot be all zeros.')
 
     if not 'verbosity' in params: params['verbosity'] = 1 
     if not 'maxit' in params:     params['maxit'] = 1000
     if not 'tol' in params:       params['tol'] = 1e-5
     if not 'step_size' in params: params['step_size'] = .5 # from (0, 1)
-    if not 'fix_zeros' in params: params['fix_zeros'] = False 
+
+    if not 'fix_zeros' in params: params['fix_zeros'] = isspmatrix(Z) 
+
     if not 'max_w' in params:     params['max_w'] = np.Inf 
     if not 'nargout' in params: params['nargout'] = 1
     
@@ -171,8 +173,8 @@ def gsp_learn_graph_log_degrees(Z, a, b, params={'nargout': 1}):
     # clear Z   # for large scale computation
 
     # Check if Z is a compressed form of a n by n distance matrix
-    card_E_0 = np.max(np.shape(z)) # initial number of edges
-    n = np.round((1 + np.sqrt(1+8*card_E_0))/ 2); # number of nodes
+    card_E_0 = np.max(np.shape(z))# initial number of edges
+    n = np.round((1 + np.sqrt(1+8*card_E_0.astype(np.float32) ))/ 2); # number of nodes
     # n(n-1)/2 = l => n = (1 + sqrt(1+8*l))/ 2
     if not (card_E_0 - n*(n-1)/2 == 0):
         raise ValueError('The length of Z must be the same as the number of upper diagonal elements of an n x n matrix')
@@ -193,29 +195,50 @@ def gsp_learn_graph_log_degrees(Z, a, b, params={'nargout': 1}):
         w_0 = np.zeros(z.shape)
 
     # if sparsity pattern is fixed we optimize with respect to a smaller number
-    # of variables, all included in w
-    if params['fix_zeros']:
-        if not utils.isvector(params['edge_mask']):
-            params['edge_mask'] = utils.squareform_sp(params['edge_mask'])
+    # of variables, all included in w.
+    if params['fix_zeros']: # even if this is not explicitly set to True, it can be automatically set to True 
+        # when the pairwise distance matrix Z is sparse.
+        if 'edge_mask' in params:
+            if not utils.isvector(params['edge_mask']):
+                params['edge_mask'] = utils.reshape_as_column(utils.squareform_sp(params['edge_mask']))
+            ind = find(params['edge_mask'])
+            
+            [S, St] = utils.sum_squareform(n,params['edge_mask'])
+            norm_K = np.sqrt(2*(n-1)) * np.sqrt(utils.nnz(params['edge_mask']) / (n*(n+1)/2)) /np.sqrt(2)
+        else:
+            ind = z.nonzero()
+            z = z.tocsr()
+            [S, St] = utils.sum_squareform(n,z)
+            norm_K = np.sqrt(2*(n-1)) * np.sqrt(utils.nnz(z) / (n*(n+1)/2)) /np.sqrt(2)
+
         # use only the non-zero elements to optimize
-        ind = find(utils.reshape_as_column(params['edge_mask'])) # ind is a tuple of arrays (I,J,Val)
+        #ind = find(utils.reshape_as_column(params['edge_mask'])) # ind is a tuple of arrays (I,J,Val)
         ind = ind[0]
-        z = z[ind]
-        if not np.isscalar(w_0):
+        if isspmatrix(z): #z = z.toarray() # full(z)
+            z = z.toarray()[ind]
+        else:
+            z = z[ind]
+        if isspmatrix(w_0): 
+            w_0 = w_0.toarray()[ind]
+        else:
             w_0 = w_0[ind]
+        #if not np.isscalar(w_0):
+        #    w_0 = w_0[ind]
     else:
         # Make z and w_0 full matrices
         if isspmatrix(z): z = z.toarray() # full(z)
         if isspmatrix(w_0): w_0 = w_0.toarray() # full(w_0)
+        [S, St] = utils.sum_squareform(n)
+        norm_K = np.sqrt(2*(n-1))
 
     w = np.zeros((z.shape))
 
     ## Needed operators
     # S*w = sum(W)
-    if params['fix_zeros']:
-        [S, St] = utils.sum_squareform(n,utils.reshape_as_column(params['edge_mask']))
-    else:
-        [S, St] = utils.sum_squareform(n)
+    ##if params['fix_zeros']:
+    ##    [S, St] = utils.sum_squareform(n,utils.reshape_as_column(params['edge_mask']))
+    ##else:
+    ##    [S, St] = utils.sum_squareform(n)
 
     # S: edges -> nodes
     K_op = lambda w: S@w # K_op = @(w) S*w
@@ -223,13 +246,13 @@ def gsp_learn_graph_log_degrees(Z, a, b, params={'nargout': 1}):
     # S': nodes -> edges
     Kt_op = lambda z: St@z # Kt_op = @(z) St*z
 
-    if params['fix_zeros']:
+#    if params['fix_zeros']:
         #norm_K = norm(S,2) ## commented out and enable the below approximation. sp.sparse.linalg.norm() does not work, raise NotImplementedError
         # approximation: 
-        norm_K = np.sqrt(2*(n-1)) * np.sqrt(utils.nnz(params['edge_mask']) / (n*(n+1)/2)) /np.sqrt(2)
-    else:
+#        norm_K = np.sqrt(2*(n-1)) * np.sqrt(utils.nnz(params['edge_mask']) / (n*(n+1)/2)) /np.sqrt(2)
+#    else:
         # the next is an upper bound if params.fix_zeros
-        norm_K = np.sqrt(2*(n-1))
+#        norm_K = np.sqrt(2*(n-1))
 
     ## ToDO: Rescaling??
     # we want    h.beta == norm_K   (see definition of mu)
@@ -408,18 +431,51 @@ def main_test_gsp_learn_graph_log_degrees():
     a = 0
 
 def estimate_theta(Z,k):
+    """ 
+        Parameters:
+            Z : np.ndarray, or scipy.sparse.coo_matrix: distance matrix
+            k : int, average node degree k
+        
+        Returns:
+            theta: float, regularization parameter that controls the sparsity of the learned adj. matrix W, produced by
+            W = gsp_learn_graph_log_degrees(theta*Z,a=1,b=1)
+    """
 
     n = Z.shape[0]
+
+    if isspmatrix(Z): 
+        to_numpy = lambda x: x.toarray().squeeze()
+    else:
+        to_numpy = lambda x: x.squeeze()
 
     theta_ub = 0
     theta_lb = 0
     for i in range(n):
-        z_row = Z[i,:]
+
+        # TODO: Maybe, we can make line 456-460 more efficient by using object's methods
+
+        # Remove non-zero entries of Z associated with edge constraints.        
+        z_row = to_numpy(Z[i,:])
+        z_row[i] = np.inf
+        idx = find(z_row)
+        z_row[i] = 0
+        z_row = z_row[idx[1]]
+
+        # Adjust k if the reduced row of Z has less entries than k+1.
+        k_ = np.min([k,len(z_row)-1])
+
+
+        # when Z is sparse, the zero entries are associated with distances greater than the distance of a node
+        # to the k-th nearest neighbor. Thus    
+        #k_E0 = utils.nnz(z_row)
+        #offset = n - 1 - k_E0
+        #offset = 0
+                
         idx_sort = np.argsort(z_row)
         #b_k = np.sum(z[idx_sort[0:card_E]])
-        b_k = np.cumsum(z_row[idx_sort])[k-1]
-        z_k = z_row[idx_sort[k-1]]
-        z_k_plus_1 = z_row[idx_sort[k]]
+        b_k = np.cumsum(z_row[idx_sort])[k_ - 1]
+        z_k = z_row[idx_sort[k_ - 1]]
+        z_k_plus_1 = z_row[idx_sort[k_]]
         theta_ub += 1/np.sqrt(k*(z_k**2)-b_k*z_k)
         theta_lb += 1/np.sqrt(k*(z_k_plus_1**2)-b_k*z_k_plus_1)
 
