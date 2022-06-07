@@ -181,7 +181,7 @@ def construct_adj_matrix(X,k,knn_edge_cons = False, k_ = 1):
         edge_index = edge_index.numpy()
         params['fix_zeros'] = True
         params['edge_mask'] = sp.sparse.coo_matrix((np.ones((edge_index[0].shape)).squeeze(), (edge_index[0],edge_index[1])), shape=Z.shape) #np.zeros(Z.shape) #np.reshape(np.array([1,1,1,1,0,0,0,1,0,0,0,0,0,0,0,0]),(16,1))
-        params['edge_mask'] = params['edge_mask'] + params['edge_mask'].T
+        params['edge_mask'] = params['edge_mask'].maximum(params['edge_mask'].T)
     params['verbosity'] = 3
     params['maxit'] = 5000
     params['nargout'] = 1
@@ -190,7 +190,7 @@ def construct_adj_matrix(X,k,knn_edge_cons = False, k_ = 1):
     b = 1
     theta = gl.estimate_theta(Z,k)
     W = gl.gsp_learn_graph_log_degrees(theta*Z,a,b,params)
-    W[W<1e-5] = 0
+    #W[W<1e-5] = 0
     return W, theta
 
 def kappa_coeff(y,y_hat):
