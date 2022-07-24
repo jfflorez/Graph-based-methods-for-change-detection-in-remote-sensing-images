@@ -1,3 +1,4 @@
+from msilib.schema import Error
 import numpy as np
 import scipy as sp
 import scipy.spatial.distance as sp_sd
@@ -6,12 +7,14 @@ import scipy.spatial.distance as sp_sd
 from skimage.segmentation import felzenszwalb, slic, quickshift, watershed
 from skimage.color import rgb2gray
 from skimage.filters import sobel
+from skimage.filters import threshold_otsu
 
 import sys
 
 # adding Folder_2 to the system path
 #sys.path.insert(0, 'C:\\Users\\juanf\\OneDrive\\Documents\\GitHub\\Learning-graphs-from-data\\')
 import utils.gl.src.gl_models as gl
+import matplotlib.pyplot as plt
 
 
 def remove_intensity_outliers(img):
@@ -51,6 +54,10 @@ def prepro_pipeline(dataset,n_spixels,context_radius):
  
     segments = slic(pseudo_rgb_img, n_segments=n_spixels, compactness=10, sigma=1,
                        start_label=1)
+
+    thresh = threshold_otsu(pseudo_rgb_img[:,:,2] )
+    binary = pseudo_rgb_img[:,:,2] > thresh
+
     #gradient = sobel(rgb2gray(pseudo_rgb_img))
     #segments = watershed(gradient, markers=1000, compactness=0.001)
 
@@ -59,6 +66,7 @@ def prepro_pipeline(dataset,n_spixels,context_radius):
 
     # Generate node features X and one-hot encoded labels Y
     X_mean, X, F = img_2_node_features_matrix(np.dstack((dataset['after'],dataset['before'])), dataset['gt'], segments, context_radius)
+    #X_mean, X, F = img_2_node_features_matrix(np.dstack((dataset['after'],dataset['before'])), binary, segments, context_radius)
 
     return X_mean, X, F, segments
 
@@ -129,6 +137,7 @@ def img_2_node_features_matrix(img, gt, segments, R):
         x0 = subscripts[idx_spixel,1]
         y0 = subscripts[idx_spixel,0]
         context_feature = np.reshape(img_padded[y0-R:y0+R+1,x0-R:x0+R+1,:],(1,C*(2*R+1)**2))
+        context_feature = context_feature/np.max(context_feature)
         X_context[i,:] = context_feature
 
 
@@ -141,25 +150,59 @@ def img_2_node_features_matrix(img, gt, segments, R):
     return X_mean, X_context, Y
 
 
-def construct_sampling_matrix(m,n,stype,seed,Y):
-    """ constructs a binary sampling matrix S of shape (k,n).
+def construct_sampling_set(label_rate, n, sampling_params = {'seed': 0, 'type': 'random'}, matrix_form = False):
+    """ constructs a binary sampling matrix S of shape (nclasses*round(p*min(card(class_i))),n).
     Parameters.
-    Y, one hot encoded class labels
+    y, integer encoded class labels
     """
-    I = sp.sparse.eye(n)
-    np.random.seed(seed)
-    if stype == 'random-class-dependent':
-        for c in range(Y.shape[1]):
-            c_class_idx = np.argwhere(Y[:,c].squeeze()).squeeze()
-            random_perm_c_idx = np.argsort(np.random.rand(len(c_class_idx),1),axis=0).squeeze()
-            if c > 0:
-                sample_idx = np.concatenate((sample_idx, c_class_idx[random_perm_c_idx[0:m]]))
+    #seed = sampling_params['seed']
+    np.random.seed(sampling_params['seed'])
+
+    if sampling_params['type'] == 'random-class-dependent':
+        if not 'labels' in sampling_params.keys():
+            raise ValueError('sampling_params["labels"] does not exists. ')
+
+        class_labels, class_cards = np.unique(sampling_params["labels"],return_counts=True)
+        nclasses = len(class_labels)
+        m = round(label_rate*n/nclasses)
+
+        sample_idx = []
+        for c in range(nclasses):
+            c_class_idx = np.argwhere(sampling_params["labels"]==class_labels[c]).squeeze()
+            c_class_card = class_cards[c]
+            
+            # Include all samples from classes with less than m elements in them
+            if m >= c_class_card:
+                m_c = c_class_card
             else:
-                sample_idx = c_class_idx[random_perm_c_idx[0:m]]
-    else: # random sampling of nodes
-        sample_idx = np.argsort(np.random.rand(n,1),axis = 0)[0:m]
+                m_c = m
     
-    return I.tocsr()[sample_idx.squeeze(),:]
+            random_perm_c_idx = np.argsort(np.random.rand(c_class_card,1),axis=0).squeeze()
+            random_perm_c_idx = random_perm_c_idx[0:m_c]
+            for i in range(len(random_perm_c_idx)):
+                sample_idx.append(c_class_idx[random_perm_c_idx[i]])
+            #if c > 0:
+            #    sample_idx = np.concatenate((sample_idx.squeeze(), c_class_idx[random_perm_c_idx].squeeze()))
+            #else:
+            #    sample_idx = c_class_idx[random_perm_c_idx].squeeze()
+    elif sampling_params['type'] == 'blue-noise': # random sampling of nodes
+        if not 'W' in sampling_params.keys():
+            raise ValueError('Adjacency matrix of shape (n,n) must provided in sampling_params["W"].')
+        m = round(label_rate*n)
+        maxIt = 1000
+        sampling_pattern = blue_noise_sampling(sampling_params["W"],m,maxIt,sampling_params['seed'])
+        sample_idx = np.arange(0,n)
+        sample_idx = sample_idx[sampling_pattern.astype(bool).squeeze()]
+    else:
+        m = round(label_rate*n)
+        sample_idx = np.argsort(np.random.rand(n,1),axis = 0)[0:m]
+
+    if matrix_form:
+        I = sp.sparse.eye(n)
+        return I.tocsr()[np.asarray(sample_idx).squeeze(),:] 
+    else:
+        return np.asarray(sample_idx).squeeze()
+        
 
 import torch
 from torch_cluster import knn_graph
@@ -183,15 +226,63 @@ def construct_adj_matrix(X,k,knn_edge_cons = False, k_ = 1):
         params['edge_mask'] = sp.sparse.coo_matrix((np.ones((edge_index[0].shape)).squeeze(), (edge_index[0],edge_index[1])), shape=Z.shape) #np.zeros(Z.shape) #np.reshape(np.array([1,1,1,1,0,0,0,1,0,0,0,0,0,0,0,0]),(16,1))
         params['edge_mask'] = params['edge_mask'].maximum(params['edge_mask'].T)
     params['verbosity'] = 3
-    params['maxit'] = 5000
+    params['maxit'] = 10000
     params['nargout'] = 1
 
     a = 1
     b = 1
     theta = gl.estimate_theta(Z,k)
     W = gl.gsp_learn_graph_log_degrees(theta*Z,a,b,params)
+    W[W<0] = 0
     #W[W<1e-5] = 0
     return W, theta
+
+def blue_noise_sampling(W,s,maxIt,seed):
+
+    n = W.shape[0]
+
+    if n == s:
+        return np.ones((n,1))
+    # Compute geodesic distance matrix
+    K = sp.sparse.csgraph.shortest_path(csgraph=W, directed=False, unweighted=False, method = 'D')
+    # 
+    sigma = np.std(K.flatten())#-np.std(K.flatten())
+    K = np.exp(-(K*K)/(2*(sigma**2)))
+
+    np.random.seed(seed)
+    rnd_idx = np.argsort(np.random.rand(n,1),axis=0).squeeze().tolist()
+
+    # Random pattern initialization
+    sampling_pattern = np.zeros((n,1))
+    sampling_pattern[rnd_idx[0:s]] = 1
+
+    old_idx_tightest_cluster = 1
+    old_idx_largest_void = 1
+    idx_tightest_cluster = 0
+    idx_largest_void = 0
+
+    cntr = 0
+    while (idx_largest_void != old_idx_tightest_cluster) or (idx_tightest_cluster!= old_idx_largest_void) or (cntr > maxIt):
+
+        old_idx_tightest_cluster = idx_tightest_cluster
+        old_idx_largest_void = idx_largest_void
+
+        nodes_2_samples_density = np.sum(K[:,np.argwhere(sampling_pattern.squeeze()).squeeze()], axis = 1)
+
+        idx_clusters = np.argwhere(sampling_pattern.squeeze())
+        idx_voids = np.argwhere(1 - sampling_pattern.squeeze())
+
+        idx_tightest_cluster =  idx_clusters[np.argmax(nodes_2_samples_density[idx_clusters],axis=0)].squeeze()
+        idx_largest_void =  idx_voids[np.argmin(nodes_2_samples_density[idx_voids],axis=0)].squeeze()   
+
+        # Swap tightest cluster sample with largest void sample (unselected node)
+
+        sampling_pattern[idx_tightest_cluster] = 0
+        sampling_pattern[idx_largest_void] = 1
+
+        cntr = cntr + 1
+
+    return sampling_pattern
 
 def kappa_coeff(y,y_hat):
     #confusion_matrix = np.zeros((2,2))
@@ -201,3 +292,15 @@ def kappa_coeff(y,y_hat):
     TN = np.sum(np.logical_and(np.logical_not(y),np.logical_not(y_hat))).astype(np.float32)
     #2*(TP*TN-FN*FP)/((TP+FP)*(FP+TN)+(TP+FN)*(FN+TN))
     return 2*((TP*TN)-(FN*FP))/((TP+FP)*(FP+TN)+(TP+FN)*(FN+TN))
+
+import os.path
+from os import path
+
+def save_figure(path_to_file):
+    cntr = 0
+    while os.path.isfile(path_to_file):
+        cntr = cntr + 1
+        idx_start = path_to_file.find('_v_')
+        path_to_file = path_to_file[0:idx_start] + '_v_' + str(cntr) + '.png' 
+    
+    plt.savefig(path_to_file, dpi=600, bbox_inches='tight')
