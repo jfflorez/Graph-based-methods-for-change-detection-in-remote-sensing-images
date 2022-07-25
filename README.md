@@ -19,7 +19,4 @@ The datasets are available for non-commercial research use. If you use our datas
   year={2022},
   publisher={IEEE}
 }
-
-## References
-
 ```
